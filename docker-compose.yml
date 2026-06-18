@@ -1,0 +1,59 @@
+version: '3.8'
+
+services:
+  rag-api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: rag-api
+    ports:
+      - "${PORT:-8000}:8000"
+    environment:
+      - GROQ_API_KEY=${GROQ_API_KEY}
+      - EMBEDDING_MODEL=${EMBEDDING_MODEL:-sentence-transformers/all-MiniLM-L6-v2}
+      - LLM_MODEL=${LLM_MODEL:-llama-3.1-8b-instant}
+      - CHUNK_SIZE=${CHUNK_SIZE:-800}
+      - CHUNK_OVERLAP=${CHUNK_OVERLAP:-200}
+      - K=${K:-20}
+      - BM25_WEIGHT=${BM25_WEIGHT:-0.4}
+      - RRF_K=${RRF_K:-60}
+      - K_MIN=${K_MIN:-3}
+      - MAX_CONTEXT_DOCS=${MAX_CONTEXT_DOCS:-10}
+      - SCORE_DROP_THRESHOLD=${SCORE_DROP_THRESHOLD:-0.5}
+      - MAX_CONTEXT_CHARS=${MAX_CONTEXT_CHARS:-6000}
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+    volumes:
+      # Persist vector store index
+      - rag-index:/app/index
+      # Mount documents directory (optional: for dynamic document updates)
+      - ./app/docs:/app/docs:ro
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  # Optional: Ingestion job (run once to build index)
+  rag-ingest:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: rag-ingest
+    environment:
+      - GROQ_API_KEY=${GROQ_API_KEY}
+      - EMBEDDING_MODEL=${EMBEDDING_MODEL:-sentence-transformers/all-MiniLM-L6-v2}
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+    volumes:
+      - rag-index:/app/index
+      - ./app/docs:/app/docs:ro
+    command: python -c "from app.ingestion import run_ingestion; run_ingestion()"
+    depends_on:
+      - rag-api
+    profiles:
+      - ingest
+
+volumes:
+  rag-index:
+    driver: local

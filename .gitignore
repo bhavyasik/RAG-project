@@ -1,0 +1,37 @@
+# ── Secrets ────────────────────────────────────────────────
+.env
+
+# ── Python ─────────────────────────────────────────────────
+.venv/
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# ── Test & lint caches ─────────────────────────────────────
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# ── Runtime-generated data (not source-controlled) ─────────
+index/
+app/docs/
+
+# ── IDE ────────────────────────────────────────────────────
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# ── OS ─────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+
+# ── Internal planning docs ─────────────────────────────────
+resume_project_guide.md
