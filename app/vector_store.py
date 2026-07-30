@@ -1,6 +1,7 @@
 """Vector store operations using Chroma and HuggingFace embeddings."""
 
 import logging
+import os
 from pathlib import Path
 
 from langchain_chroma import Chroma
@@ -20,8 +21,18 @@ class VectorStore:
         embedding_model: str = EMBEDDING_MODEL,
     ) -> None:
         self.index_path = index_path
+
+        # Determine whether the model is already cached locally.
+        # HuggingFace stores models under ~/.cache/huggingface/hub by default.
+        hf_cache = Path(os.environ.get("HF_HOME", Path.home() / ".cache" / "huggingface"))
+        model_slug = "models--" + embedding_model.replace("/", "--")
+        model_cached = (hf_cache / "hub" / model_slug).exists()
+
         self.embedding_model = HuggingFaceEmbeddings(
-            model_name=embedding_model
+            model_name=embedding_model,
+            # If model is already cached, skip ALL network calls — instant startup.
+            # On the very first run (cache miss) it will download normally.
+            model_kwargs={"local_files_only": model_cached},
         )
 
     def create_vector_store(self, chunks) -> Chroma:

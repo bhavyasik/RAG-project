@@ -409,3 +409,7 @@ def run_server():
 
     logger.info("Starting server on %s:%s", HOST, PORT)
     uvicorn.run(app, host=HOST, port=PORT)
+
+
+if __name__ == "__main__":
+    run_server()
