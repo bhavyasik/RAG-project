@@ -32,7 +32,10 @@ from .retriever import Retriever
 from .ingestion import Ingestion, run_ingestion
 from .rag_service import RAGService
 from .rag_app import RAGApp
-from .api import app, run_server
+
+# NOTE: Do NOT import api here — api.py imports from this package,
+# so importing it here creates a circular import that breaks
+# `python -m app.api` (causes a silent exit or RuntimeWarning).
 
 __all__ = [
     # Version
@@ -64,7 +67,5 @@ __all__ = [
     "RAGApp",
     # Functions
     "run_ingestion",
-    # API
-    "app",
-    "run_server",
 ]
+
