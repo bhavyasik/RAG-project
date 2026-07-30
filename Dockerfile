@@ -1,79 +1,89 @@
-# Multi-stage Dockerfile for RAG Application
-# Optimized for smaller image size and faster builds
+# ─────────────────────────────────────────────────────────────────────────────
+# RAG Application — Optimised Multi-Stage Dockerfile
+#
+# Key optimisations:
+#   1. Official uv binary   — fastest Python package installer (10-100x vs pip)
+#   2. CPU-only PyTorch     — avoids downloading 3 GB+ of CUDA/NVIDIA packages
+#   3. BuildKit cache mount — cached wheels survive image rebuilds (seconds, not
+#                             minutes, after the very first build)
+#   4. No build-essential   — all deps ship as pre-built wheels; no compilation
+#   5. Multi-stage build    — builder layer discarded; runtime image stays slim
+# ─────────────────────────────────────────────────────────────────────────────
+
+# syntax=docker/dockerfile:1.4
+# ─────────────────────────────────────────────────────────────
+# Stage 1: Builder  — install all Python dependencies
+# ─────────────────────────────────────────────────────────────
+FROM python:3.11-slim AS builder
+
+# Pull the uv binary straight from the official image (no pip install needed)
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
+
+WORKDIR /build
+
+# Copy only the dependency manifest — changes here invalidate the install layer,
+# but NOT the cache-mounted wheel store, so re-installs are still fast.
+COPY pyproject.toml ./
+
+# ── Dependency installation ───────────────────────────────────────────────────
+# --mount=type=cache  : persists the uv wheel cache between builds on the host
+# --extra-index-url   : fetches torch from the CPU-only PyTorch index (~200 MB)
+#                       instead of the default PyPI CUDA build (~3 GB+)
+# UV_LINK_MODE=copy   : use file copies instead of hardlinks (safer in Docker)
+# --no-dev            : skip dev/test dependencies for a smaller image
+RUN --mount=type=cache,target=/root/.cache/uv \
+    UV_LINK_MODE=copy \
+    uv pip install \
+        --system \
+        --extra-index-url https://download.pytorch.org/whl/cpu \
+        --index-strategy unsafe-best-match \
+        "torch>=2.0,<3" \
+        -r pyproject.toml
 
 # ─────────────────────────────────────────────────────────────
-# Stage 1: Builder
+# Stage 2: Runtime  — tiny image with only what is needed to run
 # ─────────────────────────────────────────────────────────────
-FROM python:3.11-slim as builder
+FROM python:3.11-slim AS runtime
 
 WORKDIR /app
 
-# Install build dependencies
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    build-essential \
+# libgomp1 is the only native runtime lib required by sentence-transformers
+RUN apt-get update && apt-get install -y --no-install-recommends libgomp1 \
     && rm -rf /var/lib/apt/lists/*
 
-# Create virtual environment
-RUN python -m venv /opt/venv
-ENV PATH="/opt/venv/bin:$PATH"
+# Copy the installed site-packages from the builder stage
+COPY --from=builder /usr/local/lib/python3.11/site-packages \
+                    /usr/local/lib/python3.11/site-packages
+COPY --from=builder /usr/local/bin /usr/local/bin
 
-# Upgrade pip and install build tools
-RUN pip install --no-cache-dir --upgrade pip
-
-# Copy only dependency files first (layer caching)
-COPY pyproject.toml uv.lock* ./
-
-# Install dependencies from uv.lock if available, otherwise from pyproject.toml
-RUN if [ -f uv.lock ]; then \
-        pip install uv && uv pip install --system -r pyproject.toml; \
-    else \
-        pip install -e .; \
-    fi
-
-# ─────────────────────────────────────────────────────────────
-# Stage 2: Runtime
-# ─────────────────────────────────────────────────────────────
-FROM python:3.11-slim as runtime
-
-WORKDIR /app
-
-# Install runtime dependencies only
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    libgomp1 \
-    && rm -rf /var/lib/apt/lists/* \
-    && apt-get clean
-
-# Copy virtual environment from builder
-COPY --from=builder /opt/venv /opt/venv
-ENV PATH="/opt/venv/bin:$PATH"
-
-# Copy application code
+# Copy application source
 COPY app/ ./app/
 COPY pyproject.toml ./
 
-# Create directories for data persistence
-RUN mkdir -p /app/docs /app/index && \
-    touch /app/index/.gitkeep
+# Runtime directories (mounted as volumes in production)
+RUN mkdir -p /app/docs /app/index
 
-# Set environment variables
+# ── Environment ───────────────────────────────────────────────────────────────
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
-    PIP_NO_CACHE_DIR=1 \
+    # Tell sentence-transformers/HuggingFace to cache models here
+    TRANSFORMERS_CACHE=/app/.cache/huggingface \
+    HF_HOME=/app/.cache/huggingface \
     HOST=0.0.0.0 \
     PORT=8000 \
     LOG_LEVEL=INFO
 
-# Create non-root user for security
-RUN useradd --create-home --shell /bin/bash raguser && \
-    chown -R raguser:raguser /app
+# ── Security: run as non-root ─────────────────────────────────────────────────
+RUN useradd --create-home --shell /bin/bash raguser \
+    && mkdir -p /app/.cache/huggingface \
+    && chown -R raguser:raguser /app
 USER raguser
 
-# Health check
-HEALTHCHECK --interval=30s --timeout=30s --start-period=5s --retries=3 \
-    CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')" || exit 1
+# ── Health check ──────────────────────────────────────────────────────────────
+HEALTHCHECK --interval=30s --timeout=10s --start-period=15s --retries=3 \
+    CMD python -c \
+        "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')" \
+        || exit 1
 
-# Expose port
 EXPOSE 8000
-
-# Default command: run API server
 CMD ["python", "-m", "app.api"]
